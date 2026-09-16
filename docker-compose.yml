@@ -1,0 +1,12 @@
+services:
+  app:
+    # Esta é a imagem que o nosso CI publica no GHCR (precisa ser tudo minusculo)
+    image: ghcr.io/matheusrezendev/ci-node:latest
+    ports:
+      - "3000:3000" # Mapeia a porta do conteiner para localhost:3000
+
+    # Sempre reinicia o conteiner (inclusive ao ligar o PC, se o docker iniciar)
+    restart: always
+
+    # Garante que o Docker sempre baixe a imagem mais nova
+    pull_policy: always
