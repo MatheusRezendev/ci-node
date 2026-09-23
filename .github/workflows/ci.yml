@@ -1,11 +1,11 @@
 # .github/workflows/ci.yml
-name: Pipeline de CI - Ola mundo DevOps
+name: Pipeline DevSecOps - Ola mundo DevSecOps
 
 on:
-  push: 
-    branches: ["main"]
+  push:
+    branches: ["main"] # CI + Segurança + CD (Deploy)
   pull_request:
-    branches: ["main"]
+    branches: ["main"] # CI + Segurança (apenas teste)
 
 jobs:
   test-and-build:
@@ -13,6 +13,7 @@ jobs:
     permissions:
       contents: read # Permissão para fazer checkout do código
       packages: write # Permissão para FAZER PUSH de pacotes (imagem Docker)
+      security-events: write # Relatórios de segurança
     steps:
     - name: Checkout do Código
       uses: actions/checkout@v4
@@ -29,6 +30,10 @@ jobs:
     - name: Rodar testes
       run: npm test
 
+    # SCA: falha o pipeline se houver vulnerabilidade HIGH ou CRITICAL nas dependências
+    - name: Verificar vulnerabilidades de dependências (SCA)
+      run: npm audit --audit-level=high
+
     - name: Configurar Docker Build
       uses: docker/setup-buildx-action@v3
 
@@ -41,9 +46,7 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
-    # Só roda se for um push na branch main
     - name: Extrair Metadados do Docker
-      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
       id: meta
       uses: docker/metadata-action@v5
       with:
@@ -52,13 +55,38 @@ jobs:
           type=sha
           latest
 
-    - name: Build e Push da Imagem Docker
+    # Constrói a imagem localmente no runner, SEM publicar
+    - name: Build da Imagem Docker (preparação para scan)
       uses: docker/build-push-action@v5
       with:
         context: .
         file: ./Dockerfile
-        # Só faz PUSH se for um push na branch main
-        push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        push: false
+        load: true
+        no-cache: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+
+    # Scan com Trivy: falha o pipeline em HIGH/CRITICAL que tenham correção
+    - name: Escanear vulnerabilidades com Trivy
+      uses: aquasecurity/trivy-action@v0.36.0
+      with:
+        scan-type: "fs"
+        scan-ref: "."
+        scanners: "vuln"
+        format: "table"
+        exit-code: "1"
+        severity: "HIGH,CRITICAL"
+        ignore-unfixed: true
+
+    # Só publica se for push na main E se o Trivy passou
+    - name: Push da Imagem Docker para o GHCR
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./Dockerfile
+        push: true
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
 
@@ -66,11 +94,14 @@ jobs:
     # Este job SÓ RODA se for um push na 'main'
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
-    # Precisa que o Job 1 (test-and-build) termine com sucesso
+    # Precisa que o Job 1 (test-and-build, com as verificações de segurança) passe
     needs: test-and-build
 
     # Roda no seu PC (onde o runner está ouvindo)
     runs-on: self-hosted
+    permissions:
+      contents: read
+      packages: read
 
     steps:
       # 1. Pega o código (para ter o docker-compose.yml)
